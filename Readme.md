@@ -21,5 +21,5 @@ tests/
 
 ## Contributors
 
-- Mithun Kumar
+- Mithun Kumar S R
 - Amogh Pai

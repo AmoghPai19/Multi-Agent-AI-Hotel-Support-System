@@ -1,0 +1,11 @@
+# GitHub auto-requests the right reviewer based on which files a PR touches.
+/db/                 @amogh
+/backend/app/api/    @amogh
+/backend/app/auth/   @amogh
+/backend/app/db/     @amogh
+/backend/app/core/   @amogh
+/frontend/           @amogh
+/infra/              @amogh
+/backend/app/agents/ @mithun
+# /contracts/ is shared — both must review (a change here affects both tracks)
+/contracts/          @amogh @mithun

@@ -1,0 +1,2 @@
+# Runtime dependencies for the backend.
+langgraph==1.2.9

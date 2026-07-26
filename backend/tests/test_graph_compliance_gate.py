@@ -89,7 +89,7 @@ async def test_compliance_status_present_on_every_intent_path(
     assert compliance_status["status"] in (
         ComplianceVerdict.APPROVED,
         ComplianceVerdict.REJECTED,
-        ComplianceVerdict.ERROR,
+        ComplianceVerdict.SYSTEM_ERROR,
     )
     assert "guest_message" in compliance_status and compliance_status["guest_message"]
 
@@ -112,7 +112,7 @@ async def test_reservation_path_visits_reservation_agent_before_compliance():
 
 # =============================================================================
 # 3. FAIL-CLOSED GUARANTEE: if compliance processing itself breaks, the
-#    system must report ERROR with the safe fallback message - never a
+#    system must report SYSTEM_ERROR with the safe fallback message - never a
 #    silently-approved or unvalidated response.
 # =============================================================================
 def test_compliance_node_fails_closed_on_internal_error():
@@ -135,7 +135,7 @@ def test_compliance_node_fails_closed_on_internal_error():
     result = compliance_node(exploding_state)
     compliance_status = result["compliance_status"]
 
-    assert compliance_status["status"] == ComplianceVerdict.ERROR
+    assert compliance_status["status"] == ComplianceVerdict.SYSTEM_ERROR
     assert compliance_status["guest_message"] == (
         "Sorry, I couldn't process your request safely at the moment. Please try again later."
     )

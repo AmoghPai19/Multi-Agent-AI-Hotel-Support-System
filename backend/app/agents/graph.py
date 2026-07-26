@@ -47,7 +47,7 @@ WHY THE COMPLIANCE GATE IS MANDATORY
 Per docs/architecture/architecture.md, docs/architecture/workflow.md, and
 the Compliance Verdict Contract, every response - regardless of intent -
 must pass through the Compliance Agent before reaching a guest, and the
-system must FAIL CLOSED (return status=ERROR with a safe fallback
+system must FAIL CLOSED (return status=SYSTEM_ERROR with a safe fallback
 message) if compliance processing cannot complete. This file enforces the
 "always runs" half of that rule structurally: "compliance_node" is the
 *only* node with an edge into END. The "fails closed" half is enforced
@@ -174,20 +174,28 @@ ReservationToolArguments = (
 
 # =============================================================================
 # 4. RESERVATION AGENT OUTPUT SHAPE
-# (Reservation Dispatch Contract v1.1 - "Reservation Agent Output")
+# (Reservation Dispatch Contract v1.2 - "Reservation Agent Output")
 # =============================================================================
+class ReservationStatus(str, Enum):
+    """The five frozen outcome values a Reservation Agent tool execution
+    may report. Frozen by the Reservation Dispatch Contract (v1.2) -
+    unlike the earlier v1.1 draft, `status` is no longer free-form; these
+    are the only valid values."""
+
+    SUCCESS = "SUCCESS"
+    FAILED = "FAILED"
+    NOT_FOUND = "NOT_FOUND"
+    VALIDATION_ERROR = "VALIDATION_ERROR"
+    SYSTEM_ERROR = "SYSTEM_ERROR"
+
+
 class ReservationData(TypedDict):
     """The complete 'ToolResult envelope' the Reservation Agent returns.
 
-    Frozen by the Reservation Dispatch Contract. Note `status` here is a
-    free-form string describing the tool execution outcome (e.g.
-    "success", "not_found") - the contract does not freeze a fixed set of
-    values for it the way the Compliance Verdict Contract freezes
-    APPROVED/REJECTED/ERROR, so it is intentionally left as `str` rather
-    than an Enum, pending the Reservation Agent's own specification.
+    Frozen by the Reservation Dispatch Contract v1.2.
     """
 
-    status: str
+    status: ReservationStatus
     booking_id: Optional[str]
     data: Optional[dict[str, Any]]
     message: Optional[str]
@@ -200,16 +208,16 @@ class ReservationData(TypedDict):
 class ComplianceVerdict(str, Enum):
     """The three frozen compliance outcome values.
 
-    Frozen by the Compliance Verdict Contract - these exact (uppercase)
-    values, and no others, are valid. ERROR is not "something went wrong
-    with the guest's request"; it specifically means compliance
-    *validation itself* could not complete, and the system must fail
-    closed (see `compliance_node` below).
+    Frozen by the Compliance Verdict Contract (v1.1) - these exact
+    (uppercase) values, and no others, are valid. SYSTEM_ERROR is not
+    "something went wrong with the guest's request"; it specifically
+    means compliance *validation itself* could not complete, and the
+    system must fail closed (see `compliance_node` below).
     """
 
     APPROVED = "APPROVED"
     REJECTED = "REJECTED"
-    ERROR = "ERROR"
+    SYSTEM_ERROR = "SYSTEM_ERROR"
 
 
 class ComplianceStatus(TypedDict):
@@ -230,7 +238,7 @@ class ComplianceStatus(TypedDict):
 
     Field-level rules from the contract:
       - `guest_message` MUST always be present and guest-safe when
-        `status` is REJECTED or ERROR - it is the only field the
+        `status` is REJECTED or SYSTEM_ERROR - it is the only field the
         WebSocket/FastAPI layer is permitted to render to the guest.
       - `internal_reason` is diagnostic-only and must NEVER be exposed to
         the guest.
@@ -347,11 +355,19 @@ def reservation_node(state: HotelSupportState) -> NodeResult:
     # TODO: Replace with a real call into app.agents.reservation once that
     # module implements PostgreSQL-backed execution of `tool_name` with
     # `tool_arguments` (docs/agents/reservation_agent.md).
+    #
+    # NOTE: "NOT_IMPLEMENTED" is intentionally NOT one of the five frozen
+    # ReservationStatus values (SUCCESS/FAILED/NOT_FOUND/VALIDATION_ERROR/
+    # SYSTEM_ERROR) - none of those mean "this stub hasn't been built
+    # yet", and inventing a sixth frozen value just for a temporary stub
+    # would pollute the real contract. This placeholder string is a
+    # deliberate, visible violation of the enum, flagged here so it is
+    # never mistaken for a real status once app.agents.reservation exists.
     reservation_data: ReservationData = {
-        "status": "placeholder",
+        "status": "NOT_IMPLEMENTED",  # type: ignore[typeddict-item]
         "booking_id": None,
         "data": None,
-        "message": f"Reservation Agent logic not yet implemented for tool '{tool_name}'.",
+        "message": f"Reservation Agent logic not yet implemented for tool '{tool_name.value if tool_name else tool_name}'.",
     }
     result: NodeResult = {"reservation_data": reservation_data}
 
@@ -382,7 +398,7 @@ def compliance_node(state: HotelSupportState) -> NodeResult:
     FAIL-CLOSED BEHAVIOR (mandatory per the Compliance Verdict Contract):
     this function wraps its logic in a try/except specifically so that
     ANY unexpected failure - now, or once real Claude/pgvector calls
-    replace the stub - results in `status=ERROR` and the frozen safe
+    replace the stub - results in `status=SYSTEM_ERROR` and the frozen safe
     fallback message, never a silently-passed-through, unvalidated draft
     response. This structural guarantee is put in place now, while the
     body is trivial, so it cannot be accidentally omitted later when real
@@ -406,7 +422,7 @@ def compliance_node(state: HotelSupportState) -> NodeResult:
     except Exception:  # noqa: BLE001 - deliberately broad: ANY failure must fail closed.
         logger.exception("compliance_node failed - failing closed", extra={"guest_id": guest_id})
         compliance_status = {
-            "status": ComplianceVerdict.ERROR,
+            "status": ComplianceVerdict.SYSTEM_ERROR,
             "guest_message": _FAIL_CLOSED_MESSAGE,
             "reason_code": "compliance_processing_failed",
             "internal_reason": "Unhandled exception in compliance_node.",

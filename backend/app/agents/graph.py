@@ -379,58 +379,69 @@ def reservation_node(state: HotelSupportState) -> NodeResult:
 # 9. COMPLIANCE NODE (stub)
 # =============================================================================
 # Fallback message returned whenever compliance validation cannot complete.
-# Frozen text example from the Compliance Verdict Contract's "Fail-Closed
-# Behavior" section; kept as a module-level constant so both the stub and
-# the future real implementation use the exact same wording.
-_FAIL_CLOSED_MESSAGE = "Sorry, I couldn't process your request safely at the moment. Please try again later."
+# PUBLIC (not module-private) because app.agents.compliance re-uses this
+# exact wording for its own internal fail-closed handling - there must be
+# only one definition of this frozen fallback text anywhere in the
+# codebase, per the Compliance Verdict Contract's "Fail-Closed Behavior"
+# section.
+FAIL_CLOSED_MESSAGE = "Sorry, I couldn't process your request safely at the moment. Please try again later."
 
 
 def compliance_node(state: HotelSupportState) -> NodeResult:
     """Orchestration wrapper around the Compliance Agent.
 
-    TODO(future task): replace the body of the `try` block below with a
-    real call into `app.agents.compliance` (per docs/agents/compliance_agent.md
-    and docs/rag/rag_design.md), which will retrieve relevant policy
-    passages from pgvector and use Claude Sonnet to validate
-    `state["draft_response"]`, returning APPROVED, REJECTED (with a
-    guest-safe reason), or raising if validation itself fails.
+    This node's only responsibilities are: (1) log that the Compliance
+    Agent ran, (2) call it, and (3) hand its result back to the graph.
+    The actual RAG retrieval and validation logic lives entirely inside
+    `app.agents.compliance.run_compliance_agent` - see
+    docs/agents/compliance_agent.md and docs/rag/rag_design.md.
 
-    FAIL-CLOSED BEHAVIOR (mandatory per the Compliance Verdict Contract):
-    this function wraps its logic in a try/except specifically so that
-    ANY unexpected failure - now, or once real Claude/pgvector calls
-    replace the stub - results in `status=SYSTEM_ERROR` and the frozen safe
-    fallback message, never a silently-passed-through, unvalidated draft
-    response. This structural guarantee is put in place now, while the
-    body is trivial, so it cannot be accidentally omitted later when real
-    (fallible) logic is added.
+    TWO LAYERS OF FAIL-CLOSED PROTECTION (both required by the Compliance
+    Verdict Contract's "mandatory" fail-closed rule):
+      1. `run_compliance_agent` itself catches its own expected failure
+         modes (e.g. the fake retriever finding nothing) and returns a
+         proper ComplianceStatus with status=SYSTEM_ERROR - this is the
+         primary, well-understood path.
+      2. The try/except HERE is a backstop for anything unexpected that
+         escapes `run_compliance_agent` entirely (e.g. a genuine bug, an
+         import error) - so that even a defect inside the Compliance
+         Agent's own module can never result in an unvalidated response
+         reaching a guest. This backstop existed even before
+         app.agents.compliance was implemented, and is kept unchanged now
+         specifically so this guarantee never depends on the Compliance
+         Agent's internal code being bug-free.
+
+    The import below is deferred inside the function for the same reason
+    as `conversation_node`'s: app.agents.compliance imports shared types
+    from this module, and a top-level import here would create a
+    circular import.
     """
     guest_id = state.get("guest_id")
     logger.info("compliance_node started", extra={"guest_id": guest_id})
 
     try:
-        # TODO: Replace this stub with real pgvector retrieval + Claude
-        # Sonnet validation. For now, every draft response is approved
-        # unconditionally, and the guest-facing message is simply the
-        # Conversation Agent's draft response.
-        compliance_status: ComplianceStatus = {
-            "status": ComplianceVerdict.APPROVED,
-            "guest_message": state.get("draft_response", ""),
-            "reason_code": None,
-            "internal_reason": None,
-            "metadata": None,
-        }
-    except Exception:  # noqa: BLE001 - deliberately broad: ANY failure must fail closed.
-        logger.exception("compliance_node failed - failing closed", extra={"guest_id": guest_id})
-        compliance_status = {
-            "status": ComplianceVerdict.SYSTEM_ERROR,
-            "guest_message": _FAIL_CLOSED_MESSAGE,
-            "reason_code": "compliance_processing_failed",
-            "internal_reason": "Unhandled exception in compliance_node.",
-            "metadata": None,
-        }
+        from app.agents.compliance import run_compliance_agent
 
-    result: NodeResult = {"compliance_status": compliance_status}
-    logger.info("compliance_node finished", extra={"status": compliance_status["status"]})
+        result = run_compliance_agent(state)
+    except Exception:  # noqa: BLE001 - deliberately broad: ANY failure must fail closed.
+        logger.exception(
+            "compliance_node caught an unexpected failure escaping run_compliance_agent "
+            "- failing closed",
+            extra={"guest_id": guest_id},
+        )
+        compliance_status: ComplianceStatus = {
+            "status": ComplianceVerdict.SYSTEM_ERROR,
+            "guest_message": FAIL_CLOSED_MESSAGE,
+            "reason_code": "compliance_node_unexpected_failure",
+            "internal_reason": "Unhandled exception escaped run_compliance_agent.",
+            "metadata": None,
+        }
+        result = {"compliance_status": compliance_status}
+
+    logger.info(
+        "compliance_node finished",
+        extra={"status": result.get("compliance_status", {}).get("status")},
+    )
     return result
 
 

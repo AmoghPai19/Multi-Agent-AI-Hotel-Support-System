@@ -46,3 +46,17 @@ grant usage, select on all sequences in schema public to app_writer;
 -- DELIBERATELY no DELETE grant anywhere, and no rights on policy_* tables:
 --   * cancellations are status changes, not row deletes (kept for audit)
 --   * policy content is written by a separate admin ingestion path
+
+-- Ingestion role: writes the embedded policy corpus only.
+do $$ begin
+  if not exists (select from pg_roles where rolname = 'app_ingest') then
+    create role app_ingest login password 'app_ingest_dev_pw';
+  end if;
+end $$;
+grant connect on database hotel to app_ingest;
+grant usage on schema public to app_ingest;
+grant select, insert, update on
+    policy_documents,
+    policy_chunks
+  to app_ingest;
+grant usage, select on all sequences in schema public to app_ingest;

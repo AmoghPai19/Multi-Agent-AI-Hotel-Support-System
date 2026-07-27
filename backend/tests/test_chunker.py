@@ -130,13 +130,22 @@ def test_empty_policies_directory_raises_value_error(tmp_path):
         chunk_all_policies(tmp_path)
 
 
+def test_category_is_derived_correctly_from_filename():
+    policies_dir = _require_policies_dir()
+    chunks = chunk_policy_file(policies_dir / "02_cancellation_policy.md")
+    assert all(c.category == "cancellation" for c in chunks)
+
+    chunks = chunk_policy_file(policies_dir / "08_overbooking_walked_guest_policy.md")
+    assert all(c.category == "overbooking_walked_guest" for c in chunks)
+
+
 def test_policy_chunk_record_is_immutable():
     """PolicyChunkRecord is frozen - a chunk's metadata should never be
     mutated after parsing, since ingest.py and embedder.py both read
     from it without expecting it to change underneath them."""
     record = PolicyChunkRecord(
         source_file="x.md", policy_id="POL-X", document_title="X",
-        version="1.0", chunk_index=0, section_title="1. X", content="text",
+        version="1.0", category="x", chunk_index=0, section_title="1. X", content="text",
     )
     with pytest.raises(Exception):  # dataclasses.FrozenInstanceError
         record.policy_id = "POL-Y"  # type: ignore[misc]

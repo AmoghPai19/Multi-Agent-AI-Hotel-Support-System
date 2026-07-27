@@ -187,7 +187,7 @@ create table policy_chunks (
     chunk_index  integer not null,
     content      text not null,
     category     text,                   -- denormalized for fast metadata filtering
-    embedding    vector(1536),
+    embedding    vector(1024),
     unique (document_id, chunk_index)
 );
 

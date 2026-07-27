@@ -26,16 +26,19 @@ This file must NEVER:
 
 WHAT THIS FILE CURRENTLY IS
 -----------------------------
-Per the Plan of Action (Phase 2, Mithun #3: "Compliance agent - in-memory
-fake retriever first; get approve / reject / fail-closed right"), this is
-a REAL implementation of the approve/reject/fail-closed control flow,
-using a small, hardcoded, in-memory "fake" policy knowledge base instead
-of real pgvector similarity search, and simple keyword/phrase matching
-instead of a real embedding model and LLM reasoning. Every placeholder is
-marked with a TODO describing exactly what replaces it later (see "FUTURE
-TODOs" at the bottom of this file). Despite using fake retrieval and
-fake contradiction-detection, the CONTROL FLOW here is real and fully
-tested - see tests/test_compliance_agent.py.
+This module now has TWO implementations:
+
+  - `run_compliance_agent` (Section 5) - the REAL production
+    implementation: real pgvector retrieval (retriever.py) + real Claude
+    Sonnet reasoning (llm_validator.py). This is what graph.py's
+    compliance_node actually calls.
+
+  - `run_compliance_agent_offline_fake_kb` (Section 4) - the original
+    offline implementation using a small, hardcoded, in-memory "fake"
+    policy knowledge base and simple keyword/phrase matching. Kept,
+    unchanged, because its 19 tests remain valuable as fast, free,
+    fully-offline proof that the approve/reject/fail-closed control flow
+    is correct, independent of any live database or LLM.
 """
 
 # --- Standard library imports -----------------------------------------------
@@ -57,6 +60,8 @@ from app.agents.graph import (
     HotelSupportState,
     NodeResult,
 )
+from app.agents.rag.llm_validator import LLMValidationError, validate_with_claude
+from app.agents.rag.retriever import RetrievalError, retrieve_top_k
 
 # Module-level logger, following the same pattern as conversation.py: no
 # handlers or `basicConfig()` are configured here.
@@ -211,10 +216,21 @@ def check_for_policy_violation(
 
 
 # =============================================================================
-# 4. MAIN ENTRY POINT - called by graph.py's compliance_node
+# 4. OFFLINE FAKE-KB IMPLEMENTATION (kept for local dev / fast, free tests)
 # =============================================================================
-def run_compliance_agent(state: HotelSupportState) -> NodeResult:
-    """Run the Compliance Agent for the current turn.
+def run_compliance_agent_offline_fake_kb(state: HotelSupportState) -> NodeResult:
+    """Run the Compliance Agent using the offline, in-memory fake policy
+    knowledge base (see Section 1 above) - no network, no database, no
+    API key required.
+
+    SUPERSEDED as graph.py's production entry point by
+    `run_compliance_agent` below (real pgvector retrieval + real Claude
+    Sonnet reasoning). This function is kept, unchanged, specifically
+    because its 19 existing tests remain valuable as fast, free,
+    fully-offline proof that the approve/reject/fail-closed CONTROL FLOW
+    is correct - independent of whether a real database or LLM is
+    reachable. Useful for local development without needing
+    DATABASE_URL_RO / ANTHROPIC_API_KEY configured at all.
 
     Returns a partial state update containing a fully-formed
     `ComplianceStatus` envelope (see graph.py). This function handles its
@@ -307,24 +323,127 @@ def run_compliance_agent(state: HotelSupportState) -> NodeResult:
 
 
 # =============================================================================
+# 5. REAL PRODUCTION IMPLEMENTATION - called by graph.py's compliance_node
+# =============================================================================
+def run_compliance_agent(
+    state: HotelSupportState,
+    db_conn=None,
+    voyage_client=None,
+    anthropic_client=None,
+) -> NodeResult:
+    """Run the REAL Compliance Agent: pgvector similarity retrieval
+    (retriever.py) + genuine Claude Sonnet reasoning (llm_validator.py).
+
+    This is the function graph.py's `compliance_node` actually calls -
+    the cutover from the offline fake-KB implementation
+    (`run_compliance_agent_offline_fake_kb` above) to real retrieval and
+    real reasoning against the genuine 20-policy corpus ingested by
+    ingest.py.
+
+    NO SILENT FALLBACK: if DATABASE_URL_RO or ANTHROPIC_API_KEY is
+    missing, or either the retriever or the LLM call fails for any
+    reason, this fails CLOSED (status=SYSTEM_ERROR) - it does NOT quietly
+    fall back to the offline fake-KB path. A misconfigured production
+    deployment must be loud and immediately visible (every guest turn
+    returns the fail-closed message and it shows up in logs/monitoring),
+    never a silent degradation to validating against a hardcoded 4-policy
+    stand-in that guests and operators would have no way of noticing.
+
+    Args:
+        state: the shared graph state (user_message, draft_response, guest_id).
+        db_conn: an existing database connection for retriever.py, or
+            None to let retriever.py open one from DATABASE_URL_RO.
+            Accepting an injected connection/clients is what makes this
+            testable without a real database or API key - see
+            tests/test_compliance_agent.py's mock-based tests for this
+            function.
+        voyage_client: passed through to retrieve_top_k() for embedding
+            the search query - None uses a real Voyage AI client.
+        anthropic_client: passed through to validate_with_claude() - None
+            uses a real Anthropic client built from ANTHROPIC_API_KEY.
+    """
+    try:
+        guest_id = state.get("guest_id", "")
+        user_message = state.get("user_message", "")
+        draft_response = state.get("draft_response", "")
+
+        logger.info("Compliance Agent (real RAG) started", extra={"guest_id": guest_id})
+
+        retrieved_chunks = retrieve_top_k(
+            f"{user_message} {draft_response}".strip(),
+            conn=db_conn,
+            voyage_client=voyage_client,
+            top_k=3,
+        )
+        logger.info(
+            "Policy retrieval complete",
+            extra={
+                "guest_id": guest_id,
+                "retrieved_count": len(retrieved_chunks),
+                "retrieved_policy_ids": [chunk.policy_id for chunk in retrieved_chunks],
+            },
+        )
+
+        llm_result = validate_with_claude(
+            user_message, draft_response, retrieved_chunks, client=anthropic_client
+        )
+        logger.info(
+            "Compliance verdict reached",
+            extra={"guest_id": guest_id, "verdict": llm_result.verdict.value},
+        )
+
+        compliance_status: ComplianceStatus = {
+            "status": llm_result.verdict,
+            "guest_message": llm_result.guest_message,
+            "reason_code": None,
+            # `llm_result.reason` is Claude's own internal explanation -
+            # diagnostic only, never rendered to the guest (same rule as
+            # the offline implementation above).
+            "internal_reason": llm_result.reason,
+            "metadata": (
+                {"retrieved_policy_ids": [chunk.policy_id for chunk in retrieved_chunks]}
+                if retrieved_chunks
+                else None
+            ),
+        }
+
+        logger.info("Compliance Agent (real RAG) finished", extra={"guest_id": guest_id})
+
+    except (RetrievalError, LLMValidationError, Exception):  # noqa: BLE001 - ANY failure must fail closed.
+        logger.exception("Compliance Agent (real RAG) failed - failing closed")
+        compliance_status = {
+            "status": ComplianceVerdict.SYSTEM_ERROR,
+            "guest_message": FAIL_CLOSED_MESSAGE,
+            "reason_code": "compliance_processing_failed",
+            "internal_reason": "Unhandled exception during real RAG compliance processing.",
+            "metadata": None,
+        }
+
+    return {"compliance_status": compliance_status}
+
+
+# =============================================================================
 # FUTURE TODOs (consolidated)
 # =============================================================================
-#   - pgvector retriever:      replace `retrieve_relevant_policies` with a
-#                              real pgvector similarity search against
-#                              Amogh's `policy_chunks` table.
-#   - Claude Sonnet reasoning: replace `check_for_policy_violation`'s
-#                              fixed contradiction-phrase matching with a
-#                              real LLM call that reasons about whether
-#                              the draft response is actually consistent
-#                              with each retrieved policy's real text.
-#   - Document ingestion:      the offline pipeline that turns real hotel
-#                              policy documents into rows in
-#                              `policy_chunks` (chunking, embedding) -
-#                              separate from this module entirely (see
-#                              docs/rag/rag_design.md).
+# =============================================================================
+# STATUS OF FORMER TODOs
+# =============================================================================
+#   - pgvector retriever:      DONE - see app.agents.rag.retriever,
+#                              used by the real `run_compliance_agent` above.
+#   - Claude Sonnet reasoning: DONE - see app.agents.rag.llm_validator,
+#                              used by the real `run_compliance_agent` above.
+#   - Document ingestion:      DONE - see app.agents.rag.ingest.
+#
+# REMAINING FUTURE TODOs:
 #   - Prompt Templates:        introduce a versioned, testable prompt
 #                              template for the Claude Sonnet validation
-#                              call.
-#   - LangSmith:               once Claude Sonnet calls exist here,
-#                              ensure they are traced end-to-end alongside
-#                              the logging already present in this module.
+#                              call (currently an inline string constant
+#                              in llm_validator.py).
+#   - LangSmith:               trace the real Claude Sonnet calls in
+#                              llm_validator.py end-to-end alongside the
+#                              logging already present in this module.
+#   - Remove or keep offline fake-KB path long-term: a future decision on
+#                              whether run_compliance_agent_offline_fake_kb
+#                              stays as a permanent local-dev convenience
+#                              or is eventually retired once the real path
+#                              is fully proven in production.

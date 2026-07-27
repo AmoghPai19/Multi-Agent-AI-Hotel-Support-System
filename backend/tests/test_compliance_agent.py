@@ -1,13 +1,17 @@
 """
 test_compliance_agent.py
 --------------------------
-Tests for app.agents.compliance.run_compliance_agent - proving the
-approve/reject/fail-closed logic is genuinely implemented, not just an
-unconditional "approved" stub.
+Tests for app.agents.compliance.run_compliance_agent_offline_fake_kb -
+proving the approve/reject/fail-closed logic is genuinely implemented,
+not just an unconditional "approved" stub.
 
-These tests exercise the module directly (no graph involved), since
-compliance_node in graph.py has not yet been wired to call this module
-(see the "graph.py wiring" TODO at the bottom of compliance.py).
+NAMING NOTE: this file tests the OFFLINE fake-KB implementation
+specifically (no database, no API key, no network - fast and free).
+graph.py's compliance_node now calls `run_compliance_agent` (no
+"_offline_fake_kb" suffix), which is the REAL production implementation
+using retriever.py + llm_validator.py - see
+tests/test_compliance_agent_real.py for that function's tests. Both
+implementations are exercised directly here (no graph involved).
 
 Run with:
     cd backend && pytest tests/test_compliance_agent.py -v
@@ -21,7 +25,7 @@ from app.agents.compliance import (
     FAIL_CLOSED_MESSAGE,
     check_for_policy_violation,
     retrieve_relevant_policies,
-    run_compliance_agent,
+    run_compliance_agent_offline_fake_kb,
 )
 from app.agents.graph import ComplianceVerdict
 
@@ -58,7 +62,7 @@ def test_approves_a_consistent_response():
         "user_message": "What time is check-in?",
         "draft_response": "Standard check-in time is 3:00 PM.",
     }
-    result = run_compliance_agent(state)
+    result = run_compliance_agent_offline_fake_kb(state)
     compliance_status = result["compliance_status"]
 
     assert compliance_status["status"] == ComplianceVerdict.APPROVED
@@ -73,7 +77,7 @@ def test_approves_when_no_policy_is_relevant():
         "user_message": "What's the wifi password?",
         "draft_response": "I'll help answer your hotel-related question.",
     }
-    result = run_compliance_agent(state)
+    result = run_compliance_agent_offline_fake_kb(state)
     assert result["compliance_status"]["status"] == ComplianceVerdict.APPROVED
 
 
@@ -86,7 +90,7 @@ def test_rejects_a_response_that_contradicts_the_pet_policy():
         "user_message": "Can I bring my dog?",
         "draft_response": "Yes, pets are welcome at our hotel!",
     }
-    result = run_compliance_agent(state)
+    result = run_compliance_agent_offline_fake_kb(state)
     compliance_status = result["compliance_status"]
 
     assert compliance_status["status"] == ComplianceVerdict.REJECTED
@@ -104,7 +108,7 @@ def test_rejects_a_response_that_contradicts_the_cancellation_policy():
         "user_message": "Can I cancel my reservation?",
         "draft_response": "You can cancel anytime for a full refund.",
     }
-    result = run_compliance_agent(state)
+    result = run_compliance_agent_offline_fake_kb(state)
     compliance_status = result["compliance_status"]
 
     assert compliance_status["status"] == ComplianceVerdict.REJECTED
@@ -121,7 +125,7 @@ def test_rejection_never_exposes_internal_reason_in_guest_message():
         "user_message": "Can I bring my dog?",
         "draft_response": "Yes, pets are welcome at our hotel!",
     }
-    result = run_compliance_agent(state)
+    result = run_compliance_agent_offline_fake_kb(state)
     compliance_status = result["compliance_status"]
 
     assert compliance_status["internal_reason"] is not None
@@ -153,7 +157,7 @@ def test_fails_closed_on_state_access_error(bad_key: str):
     user_message would have propagated as an unhandled exception instead
     of failing closed."""
     state = _make_exploding_state(bad_key)
-    result = run_compliance_agent(state)
+    result = run_compliance_agent_offline_fake_kb(state)
     compliance_status = result["compliance_status"]
 
     assert compliance_status["status"] == ComplianceVerdict.SYSTEM_ERROR
@@ -172,7 +176,7 @@ def test_fails_closed_when_retrieval_itself_raises(monkeypatch):
 
     monkeypatch.setattr(compliance_module, "retrieve_relevant_policies", broken_retriever)
 
-    result = run_compliance_agent({"guest_id": "g6", "user_message": "x", "draft_response": "y"})
+    result = run_compliance_agent_offline_fake_kb({"guest_id": "g6", "user_message": "x", "draft_response": "y"})
     compliance_status = result["compliance_status"]
 
     assert compliance_status["status"] == ComplianceVerdict.SYSTEM_ERROR
@@ -195,7 +199,7 @@ def test_return_shape_always_matches_frozen_envelope(state):
     `compliance_status` must always have exactly these five keys - never
     more, never fewer, never a bare string (per the Compliance Verdict
     Contract)."""
-    result = run_compliance_agent(state)
+    result = run_compliance_agent_offline_fake_kb(state)
     assert set(result.keys()) == {"compliance_status"}
     compliance_status = result["compliance_status"]
     assert set(compliance_status.keys()) == {

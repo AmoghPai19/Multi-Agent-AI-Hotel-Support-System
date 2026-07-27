@@ -37,6 +37,7 @@ def _make_chunk(index: int, section_title: str = "1. Section") -> PolicyChunkRec
         policy_id="POL-TEST-001",
         document_title="Test Policy",
         version="1.0",
+        category="test",
         chunk_index=index,
         section_title=section_title,
         content=f"Content for chunk {index}.",

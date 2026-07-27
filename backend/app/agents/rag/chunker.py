@@ -49,17 +49,43 @@ class PolicyChunkRecord:
     Field names deliberately mirror schema.sql's `policy_documents` and
     `policy_chunks` tables, so `ingest.py` can map this dataclass to a
     database row with minimal translation:
-      - policy_id, document_title, version  -> policy_documents row
-      - section_title, chunk_index, content -> policy_chunks row
+      - policy_id, document_title, version, category -> policy_documents row
+      - section_title, chunk_index, content, category -> policy_chunks row
     """
 
     source_file: str        # e.g. "02_cancellation_policy.md" (for traceability/debugging)
     policy_id: str          # e.g. "POL-CXL-002"
     document_title: str     # e.g. "Cancellation Policy"
     version: str            # e.g. "2.3"
+    category: str           # e.g. "cancellation" - derived from the filename, see _derive_category
     chunk_index: int        # 0-based position of this section within the document
     section_title: str      # e.g. "1. Purpose"
     content: str            # the section's full text (heading line excluded)
+
+
+def _derive_category(source_file: str) -> str:
+    """Derive a short, machine-readable category slug from a policy
+    file's name.
+
+    None of the 20 policy files have an explicit "Category:" metadata
+    line - only Policy ID, Effective Date, Version, Owner, and Review
+    Cycle. But every filename already encodes a clean category (e.g.
+    "02_cancellation_policy.md" -> "cancellation"), so rather than ask
+    Amogh to add a metadata line that would just duplicate the filename,
+    this derives the category from the filename itself: strip the
+    leading "NN_" number prefix and the trailing "_policy" / ".md".
+    """
+    name = source_file
+    if name.endswith(".md"):
+        name = name[: -len(".md")]
+    # Strip a leading "NN_" numeric prefix (e.g. "02_").
+    match = re.match(r"^\d+_(.+)$", name)
+    if match:
+        name = match.group(1)
+    # Strip a trailing "_policy" suffix, if present.
+    if name.endswith("_policy"):
+        name = name[: -len("_policy")]
+    return name
 
 
 def _extract_policy_id(text: str, source_file: str) -> str:
@@ -98,6 +124,7 @@ def chunk_policy_file(file_path: Path) -> list[PolicyChunkRecord]:
     policy_id = _extract_policy_id(text, source_file)
     version = _extract_version(text, source_file)
     document_title = _extract_title(text, source_file)
+    category = _derive_category(source_file)
 
     # Find every "## Section Name" header and its position in the text,
     # so we can slice out everything between one header and the next.
@@ -118,6 +145,7 @@ def chunk_policy_file(file_path: Path) -> list[PolicyChunkRecord]:
                 policy_id=policy_id,
                 document_title=document_title,
                 version=version,
+                category=category,
                 chunk_index=index,
                 section_title=section_title,
                 content=section_content,

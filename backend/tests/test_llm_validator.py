@@ -189,6 +189,31 @@ def test_validate_with_claude_sends_correct_model_and_system_prompt():
     assert "Compliance Agent" in fake_client.calls[0]["system"]
 
 
+def test_system_prompt_requires_faithful_reflection_of_real_rate_type_distinctions():
+    """This replaces an earlier, INCORRECT version of this test.
+
+    A previous prompt revision added a rule telling Claude to never
+    mention rate-type categories (e.g. "Flexible/BAR", "Advance
+    Purchase") even if retrieved. That was based on a misdiagnosis: a
+    live eval run showed Claude mentioning those exact terms and it was
+    assumed to be fabrication. Checking the REAL policy documents
+    afterward showed those terms are genuinely present in the real
+    cancellation policy's rate-type table - Claude was reading the real
+    document correctly. The harmful rule (telling Claude to suppress
+    real distinctions) has been reverted. This test now only asserts the
+    correct, bidirectional principle: don't invent things that AREN'T
+    there, but don't oversimplify away real distinctions that ARE there.
+    """
+    fake_client = _FakeAnthropicClient(
+        response_json='{"verdict": "APPROVED", "guest_message": "x", "reason": null}'
+    )
+    validate_with_claude("q", "r", [], client=fake_client)
+
+    system_prompt = fake_client.calls[0]["system"]
+    assert "invent" in system_prompt.lower()
+    assert "oversimplif" in system_prompt.lower() or "faithfully reflect" in system_prompt.lower()
+
+
 def test_validate_with_claude_handles_empty_retrieved_chunks():
     """No relevant policy was found - the prompt should say so explicitly
     rather than sending an empty/confusing excerpts section."""

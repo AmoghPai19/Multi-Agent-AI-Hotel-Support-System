@@ -74,7 +74,7 @@ Rules:
 2. If the draft response is consistent with (or not contradicted by) the retrieved excerpts, approve it as-is.
 3. If the draft response contradicts or is inconsistent with a retrieved excerpt (e.g., it says something is allowed when the policy says it isn't, or states a wrong fee/deadline/number), reject it and provide a corrected guest_message based strictly on the retrieved excerpts.
 4. If the retrieved excerpts do not cover the topic the draft response makes a specific claim about, and that claim cannot be verified, reject it with a safe, generic guest_message rather than approving an unverifiable claim.
-5. Never invent policy details not present in the retrieved excerpts.
+5. Never invent policy details not present in the retrieved excerpts. This cuts both ways: do not add specifics (rate types, cutoff times, categories) that are NOT in the retrieved excerpts, but if the retrieved excerpts DO contain rate-type-specific or conditional terms, your response must faithfully reflect those real distinctions rather than oversimplifying them into a single blanket answer - an incomplete answer that omits a real, applicable exception is itself a form of inaccuracy.
 
 Respond with ONLY a JSON object, no other text, no markdown code fences, in exactly this shape:
 {"verdict": "APPROVED" or "REJECTED", "guest_message": "the text to actually show the guest", "reason": "a short internal explanation, never shown to the guest"}"""

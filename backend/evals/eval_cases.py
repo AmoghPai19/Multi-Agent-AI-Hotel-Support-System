@@ -54,9 +54,22 @@ EVAL_CASES: list[EvalCase] = [
     EvalCase(
         case_id="cancellation-correct",
         user_message="Can I cancel my reservation for free?",
-        draft_response="Yes, you can cancel free of charge up to 48 hours before check-in.",
+        draft_response=(
+            "It depends on your rate type. For Flexible/BAR bookings, cancellation is free up to "
+            "48 hours before arrival. Advance Purchase and Non-Refundable rates cannot be cancelled "
+            "for a refund at any time."
+        ),
         expected_verdict="APPROVED",
-        notes="Matches POL-CXL-002.",
+        notes=(
+            "CORRECTED after a real finding: the original version of this case used a blanket "
+            "'free up to 48 hours' draft response and expected APPROVED. A live eval run showed "
+            "Claude correctly REJECTING that blanket claim every time, and checking the real "
+            "02_cancellation_policy.md confirmed why - the actual policy has a rate-type-dependent "
+            "table (Flexible/BAR vs. Advance Purchase/Non-Refundable vs. Corporate/Negotiated), each "
+            "with different terms. The original draft response was genuinely incomplete/misleading, "
+            "not a case of Claude hallucinating. This corrected draft response reflects the real "
+            "rate-type distinction and should be approved as-is."
+        ),
     ),
     EvalCase(
         case_id="service-animal-correct",

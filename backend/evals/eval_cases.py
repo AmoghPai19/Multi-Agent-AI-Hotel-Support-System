@@ -53,22 +53,24 @@ EVAL_CASES: list[EvalCase] = [
     ),
     EvalCase(
         case_id="cancellation-correct",
-        user_message="Can I cancel my reservation for free?",
+        user_message="I booked a Flexible/BAR rate - can I cancel for free?",
         draft_response=(
-            "It depends on your rate type. For Flexible/BAR bookings, cancellation is free up to "
-            "48 hours before arrival. Advance Purchase and Non-Refundable rates cannot be cancelled "
-            "for a refund at any time."
+            "Yes, for a Flexible/BAR rate, cancellation is free if done at least 48 hours "
+            "(by 6:00 PM property local time) before your arrival date. After that cutoff, "
+            "or in the case of a no-show, a charge of one night's room plus tax applies."
         ),
         expected_verdict="APPROVED",
         notes=(
-            "CORRECTED after a real finding: the original version of this case used a blanket "
-            "'free up to 48 hours' draft response and expected APPROVED. A live eval run showed "
-            "Claude correctly REJECTING that blanket claim every time, and checking the real "
-            "02_cancellation_policy.md confirmed why - the actual policy has a rate-type-dependent "
-            "table (Flexible/BAR vs. Advance Purchase/Non-Refundable vs. Corporate/Negotiated), each "
-            "with different terms. The original draft response was genuinely incomplete/misleading, "
-            "not a case of Claude hallucinating. This corrected draft response reflects the real "
-            "rate-type distinction and should be approved as-is."
+            "CORRECTED for a third time, this time verified against every single column of the "
+            "exact real table row before finalizing (not an approximation): the real "
+            "02_cancellation_policy.md Flexible/BAR row is "
+            "'48 hours (6:00 PM property local time) before arrival date | 1 night's room + tax | "
+            "1 night's room + tax' (cutoff / after-cutoff penalty / no-show penalty). Earlier "
+            "versions of this case omitted the '6:00 PM property local time' qualifier and the "
+            "no-show penalty column, which is very likely why the second correction was still "
+            "rejected 3/3 (Claude flagging incompleteness relative to the SPECIFIC row asked "
+            "about, not just the category). This version covers all 4 columns of that one row "
+            "exactly, since the question now names a single specific rate type."
         ),
     ),
     EvalCase(

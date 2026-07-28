@@ -60,13 +60,14 @@ class _FakeUsage:
 
 
 class _FakeResponse:
-    def __init__(self, text: str, include_thinking_block: bool = False):
+    def __init__(self, text: str, include_thinking_block: bool = False, stop_reason: str = "end_turn"):
         blocks = []
         if include_thinking_block:
             blocks.append(_FakeThinkingBlock())
         blocks.append(_FakeTextBlock(text))
         self.content = blocks
         self.usage = _FakeUsage()
+        self.stop_reason = stop_reason
 
 
 class _FakeAnthropicClient:
@@ -78,10 +79,12 @@ class _FakeAnthropicClient:
         response_json: str | None = None,
         raise_on_call: Exception | None = None,
         include_thinking_block: bool = False,
+        stop_reason: str = "end_turn",
     ):
         self.response_json = response_json
         self.raise_on_call = raise_on_call
         self.include_thinking_block = include_thinking_block
+        self.stop_reason = stop_reason
         self.calls: list[dict] = []
 
         class _Messages:
@@ -94,7 +97,11 @@ class _FakeAnthropicClient:
                 )
                 if self.outer.raise_on_call is not None:
                     raise self.outer.raise_on_call
-                return _FakeResponse(self.outer.response_json, include_thinking_block=self.outer.include_thinking_block)
+                return _FakeResponse(
+                    self.outer.response_json,
+                    include_thinking_block=self.outer.include_thinking_block,
+                    stop_reason=self.outer.stop_reason,
+                )
 
         self.messages = _Messages(self)
 
@@ -211,6 +218,23 @@ def test_validate_with_claude_handles_thinking_block_before_text_block():
     assert result.guest_message == "Check-in is 3pm."
 
 
+def test_truncated_response_raises_clear_truncation_error_not_json_error():
+    """Regression test for a second REAL bug found in the same live eval
+    run: a detailed, genuine policy correction exceeded the old
+    _MAX_TOKENS=300 limit and got cut off mid-sentence, producing invalid
+    JSON. The raw JSONDecodeError made this look like a parsing bug; it
+    was actually a token-limit bug. This proves truncation is now
+    detected explicitly (via stop_reason) and raises a clear, specific
+    error rather than a confusing JSON parse failure."""
+    fake_client = _FakeAnthropicClient(
+        response_json='{"verdict": "REJECTED", "guest_message": "This got cut off mid-sen',
+        stop_reason="max_tokens",
+    )
+
+    with pytest.raises(LLMValidationError, match="truncated"):
+        validate_with_claude("q", "r", [], client=fake_client)
+
+
 # =============================================================================
 # 3. Error handling - each real Anthropic error type covered
 # =============================================================================
@@ -276,6 +300,7 @@ def test_response_with_only_thinking_block_and_no_text_raises_clear_error():
     class _ThinkingOnlyResponse:
         content = [_FakeThinkingBlock()]
         usage = _FakeUsage()
+        stop_reason = "end_turn"
 
     class _ThinkingOnlyMessages:
         def create(self, **kwargs):

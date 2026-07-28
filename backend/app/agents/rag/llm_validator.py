@@ -41,9 +41,13 @@ logger = logging.getLogger(__name__)
 # model verified live by scripts/verify_anthropic_key.py.
 CLAUDE_MODEL = "claude-sonnet-5"
 
-# Keep responses short and cheap - this call only needs to return a small
-# structured verdict, not a long completion.
-_MAX_TOKENS = 300
+# Keep responses cheap, but generous enough for a real, detailed
+# correction (e.g. a cancellation policy with multiple rate-type
+# exceptions). A previous value of 300 was found, via a real live eval
+# run, to be too small: several genuine corrected guest_message strings
+# were cut off mid-sentence, producing truncated/invalid JSON that looked
+# like a parsing bug but was actually a token-limit bug.
+_MAX_TOKENS = 1024
 
 
 class LLMValidationError(Exception):
@@ -182,6 +186,19 @@ def validate_with_claude(
 
     if not response.content:
         raise LLMValidationError("Claude returned an empty response")
+
+    # Detect truncation EXPLICITLY, before attempting to parse - a
+    # truncated response is not "invalid JSON" (a parsing problem), it's
+    # "the response was cut off" (a token-limit problem), and conflating
+    # the two makes this exact bug look like a JSON-parsing issue rather
+    # than what it actually is. Found via a real live eval run: a detailed
+    # policy correction genuinely exceeded the previous, too-small
+    # _MAX_TOKENS value and got cut off mid-sentence.
+    if response.stop_reason == "max_tokens":
+        raise LLMValidationError(
+            f"Claude's response was truncated (hit max_tokens={_MAX_TOKENS}) before "
+            f"completing valid JSON. Increase _MAX_TOKENS in llm_validator.py."
+        )
 
     # BUG FIX (found via a real live eval run): Claude Sonnet can return a
     # `ThinkingBlock` (its internal reasoning trace) as an EARLIER content

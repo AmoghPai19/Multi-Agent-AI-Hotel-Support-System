@@ -21,6 +21,7 @@ import os
 from dataclasses import dataclass
 
 import psycopg2
+from langsmith import traceable
 from psycopg2.extensions import connection as PGConnection
 
 from app.agents.rag.embedder import embed_query
@@ -66,6 +67,7 @@ def _vector_literal(embedding: list[float]) -> str:
     return "[" + ",".join(repr(value) for value in embedding) + "]"
 
 
+@traceable(name="retrieve_top_k", run_type="retriever")
 def retrieve_top_k(
     query: str,
     conn: PGConnection | None = None,

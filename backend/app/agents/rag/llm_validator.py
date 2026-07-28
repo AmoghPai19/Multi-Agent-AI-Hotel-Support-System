@@ -30,8 +30,10 @@ import logging
 from dataclasses import dataclass
 
 import anthropic
+from langsmith import traceable
 
 from app.agents.graph import ComplianceVerdict
+from app.agents.rag.prompts.compliance_system_prompt import COMPLIANCE_SYSTEM_PROMPT
 from app.agents.rag.retriever import RetrievedChunk
 
 logger = logging.getLogger(__name__)
@@ -67,17 +69,9 @@ class LLMValidationResult:
     reason: str | None             # human-readable reason, for reason_code/internal_reason - never shown to the guest
 
 
-_SYSTEM_PROMPT = """You are the Compliance Agent for a hotel guest support system. Your ONLY job is to check whether a DRAFT RESPONSE is consistent with the RETRIEVED POLICY EXCERPTS provided to you.
-
-Rules:
-1. Only use the RETRIEVED POLICY EXCERPTS as your source of truth. Do not use any outside knowledge about hotel policies in general.
-2. If the draft response is consistent with (or not contradicted by) the retrieved excerpts, approve it as-is.
-3. If the draft response contradicts or is inconsistent with a retrieved excerpt (e.g., it says something is allowed when the policy says it isn't, or states a wrong fee/deadline/number), reject it and provide a corrected guest_message based strictly on the retrieved excerpts.
-4. If the retrieved excerpts do not cover the topic the draft response makes a specific claim about, and that claim cannot be verified, reject it with a safe, generic guest_message rather than approving an unverifiable claim.
-5. Never invent policy details not present in the retrieved excerpts. This cuts both ways: do not add specifics (rate types, cutoff times, categories) that are NOT in the retrieved excerpts, but if the retrieved excerpts DO contain rate-type-specific or conditional terms, your response must faithfully reflect those real distinctions rather than oversimplifying them into a single blanket answer - an incomplete answer that omits a real, applicable exception is itself a form of inaccuracy.
-
-Respond with ONLY a JSON object, no other text, no markdown code fences, in exactly this shape:
-{"verdict": "APPROVED" or "REJECTED", "guest_message": "the text to actually show the guest", "reason": "a short internal explanation, never shown to the guest"}"""
+# The system prompt is defined in prompts/compliance_system_prompt.py, not
+# inline here - see that module's docstring for why (its own real,
+# eval-driven revision history, including a reverted mistake).
 
 
 def _build_user_message(user_message: str, draft_response: str, retrieved_chunks: list[RetrievedChunk]) -> str:
@@ -128,6 +122,7 @@ def _parse_claude_response(raw_text: str) -> LLMValidationResult:
     )
 
 
+@traceable(name="validate_with_claude", run_type="llm")
 def validate_with_claude(
     user_message: str,
     draft_response: str,
@@ -170,7 +165,7 @@ def validate_with_claude(
         response = anthropic_client.messages.create(
             model=CLAUDE_MODEL,
             max_tokens=_MAX_TOKENS,
-            system=_SYSTEM_PROMPT,
+            system=COMPLIANCE_SYSTEM_PROMPT,
             messages=[
                 {"role": "user", "content": _build_user_message(user_message, draft_response, retrieved_chunks)}
             ],

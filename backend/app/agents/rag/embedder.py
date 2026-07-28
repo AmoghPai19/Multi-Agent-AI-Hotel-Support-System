@@ -41,6 +41,7 @@ import os
 from dataclasses import dataclass
 
 import voyageai
+from langsmith import traceable
 from voyageai.error import (
     APIConnectionError,
     AuthenticationError,
@@ -188,6 +189,7 @@ def embed_chunks(
     return embedded
 
 
+@traceable(name="embed_query", run_type="embedding")
 def embed_query(query: str, client: voyageai.Client | None = None) -> list[float]:
     """Embed a single guest query at SEARCH time (input_type="query").
 

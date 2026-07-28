@@ -36,7 +36,21 @@ def _make_chunk(policy_id: str, content: str) -> RetrievedChunk:
 
 class _FakeTextBlock:
     def __init__(self, text: str):
+        self.type = "text"
         self.text = text
+
+
+class _FakeThinkingBlock:
+    """Simulates Claude's internal reasoning trace block, which can
+    appear BEFORE the actual text answer block - this is the exact shape
+    that caused a real bug (content[0].text crashing with
+    AttributeError) caught during a live eval run against real Claude."""
+
+    def __init__(self, thinking_text: str = "Let me consider the policy..."):
+        self.type = "thinking"
+        self.thinking = thinking_text
+        # Deliberately no `.text` attribute - matches the real SDK's
+        # ThinkingBlock, which does not have one.
 
 
 class _FakeUsage:
@@ -46,8 +60,12 @@ class _FakeUsage:
 
 
 class _FakeResponse:
-    def __init__(self, text: str):
-        self.content = [_FakeTextBlock(text)]
+    def __init__(self, text: str, include_thinking_block: bool = False):
+        blocks = []
+        if include_thinking_block:
+            blocks.append(_FakeThinkingBlock())
+        blocks.append(_FakeTextBlock(text))
+        self.content = blocks
         self.usage = _FakeUsage()
 
 
@@ -55,9 +73,15 @@ class _FakeAnthropicClient:
     """A fake client matching anthropic.Anthropic's .messages.create() -
     always returns the given JSON text (or raises the given exception)."""
 
-    def __init__(self, response_json: str | None = None, raise_on_call: Exception | None = None):
+    def __init__(
+        self,
+        response_json: str | None = None,
+        raise_on_call: Exception | None = None,
+        include_thinking_block: bool = False,
+    ):
         self.response_json = response_json
         self.raise_on_call = raise_on_call
+        self.include_thinking_block = include_thinking_block
         self.calls: list[dict] = []
 
         class _Messages:
@@ -70,7 +94,7 @@ class _FakeAnthropicClient:
                 )
                 if self.outer.raise_on_call is not None:
                     raise self.outer.raise_on_call
-                return _FakeResponse(self.outer.response_json)
+                return _FakeResponse(self.outer.response_json, include_thinking_block=self.outer.include_thinking_block)
 
         self.messages = _Messages(self)
 
@@ -170,6 +194,23 @@ def test_validate_with_claude_handles_empty_retrieved_chunks():
     assert "No relevant policy excerpts" in sent_content
 
 
+def test_validate_with_claude_handles_thinking_block_before_text_block():
+    """Regression test for a REAL bug found during a live eval run: Claude
+    returned a ThinkingBlock as content[0], and the old code's
+    `response.content[0].text` crashed with AttributeError since
+    ThinkingBlock has no `.text` attribute. This proves the fix - finding
+    the actual text block regardless of its position - works."""
+    fake_client = _FakeAnthropicClient(
+        response_json='{"verdict": "APPROVED", "guest_message": "Check-in is 3pm.", "reason": null}',
+        include_thinking_block=True,
+    )
+
+    result = validate_with_claude("What time is check-in?", "Check-in is 3pm.", [], client=fake_client)
+
+    assert result.verdict == ComplianceVerdict.APPROVED
+    assert result.guest_message == "Check-in is 3pm."
+
+
 # =============================================================================
 # 3. Error handling - each real Anthropic error type covered
 # =============================================================================
@@ -225,3 +266,23 @@ def test_empty_response_content_raises_error():
 
     with pytest.raises(LLMValidationError, match="empty response"):
         validate_with_claude("q", "r", [], client=_EmptyClient())
+
+
+def test_response_with_only_thinking_block_and_no_text_raises_clear_error():
+    """A different edge case from the empty-content one above: content is
+    NOT empty (there's a thinking block), but there is still no usable
+    text block - must fail with a clear message, not a raw AttributeError."""
+
+    class _ThinkingOnlyResponse:
+        content = [_FakeThinkingBlock()]
+        usage = _FakeUsage()
+
+    class _ThinkingOnlyMessages:
+        def create(self, **kwargs):
+            return _ThinkingOnlyResponse()
+
+    class _ThinkingOnlyClient:
+        messages = _ThinkingOnlyMessages()
+
+    with pytest.raises(LLMValidationError, match="no text block"):
+        validate_with_claude("q", "r", [], client=_ThinkingOnlyClient())

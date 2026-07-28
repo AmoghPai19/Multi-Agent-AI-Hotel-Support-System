@@ -183,7 +183,19 @@ def validate_with_claude(
     if not response.content:
         raise LLMValidationError("Claude returned an empty response")
 
-    raw_text = response.content[0].text
+    # BUG FIX (found via a real live eval run): Claude Sonnet can return a
+    # `ThinkingBlock` (its internal reasoning trace) as an EARLIER content
+    # block before the actual `TextBlock` answer - content[0] is not
+    # reliably the text block. Find the first block that actually has
+    # type "text" instead of assuming position 0.
+    text_blocks = [block for block in response.content if getattr(block, "type", None) == "text"]
+    if not text_blocks:
+        raise LLMValidationError(
+            f"Claude's response contained no text block (got block types: "
+            f"{[getattr(b, 'type', type(b).__name__) for b in response.content]})"
+        )
+    raw_text = text_blocks[0].text
+
     logger.info("Claude validation call complete", extra={"input_tokens": response.usage.input_tokens})
 
     return _parse_claude_response(raw_text)

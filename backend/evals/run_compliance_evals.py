@@ -70,7 +70,11 @@ class CaseResult:
 
 def _attempt_passes(case: EvalCase, guest_message: str, verdict: str) -> tuple[bool, str]:
     if verdict != case.expected_verdict:
-        return False, f"verdict={verdict!r}, expected={case.expected_verdict!r}"
+        return (
+            False,
+            f"verdict={verdict!r}, expected={case.expected_verdict!r}, "
+            f"guest_message={guest_message!r}",
+        )
 
     if case.expected_verdict == "REJECTED" and case.must_mention:
         if case.must_mention.lower() not in guest_message.lower():

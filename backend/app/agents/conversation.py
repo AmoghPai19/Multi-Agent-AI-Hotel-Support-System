@@ -204,7 +204,18 @@ def select_reservation_tool(user_message: str) -> ReservationTool:
 # A simple pattern used only to demonstrate where a booking reference
 # WOULD be pulled from the message. This is not a real ID validator - see
 # the TODO in `extract_tool_arguments` below.
-_BOOKING_ID_PATTERN = re.compile(r"\b([A-Z]{2,}\d{3,}|\d{5,})\b")
+#
+# NOTE: this must match the REAL confirmation_code format Amogh's
+# db/schema.sql actually generates -
+# `upper(substr(md5(random()::text), 1, 8))` - an 8-character uppercase
+# hexadecimal string (digits 0-9 and letters A-F only, e.g. "3F9A2B7C").
+# An earlier version of this pattern assumed a "letters-then-digits"
+# format (e.g. "ABC123"), which does not match real confirmation codes at
+# all - verified by generating 10 real codes with Postgres's actual
+# algorithm and confirming 0/10 matched the old pattern. `booking_id`
+# here refers to `confirmation_code`, NOT the reservation's raw UUID
+# `id` - guests are given the short code, never the UUID.
+_BOOKING_ID_PATTERN = re.compile(r"\b[0-9A-F]{8}\b")
 
 
 def extract_tool_arguments(
@@ -238,7 +249,7 @@ def extract_tool_arguments(
         matching `tool`.
     """
     booking_id_match = _BOOKING_ID_PATTERN.search(user_message.upper())
-    placeholder_booking_id = booking_id_match.group(1) if booking_id_match else "UNKNOWN"
+    placeholder_booking_id = booking_id_match.group(0) if booking_id_match else "UNKNOWN"
 
     if tool == ReservationTool.CREATE_RESERVATION:
         create_args: CreateReservationArgs = {
